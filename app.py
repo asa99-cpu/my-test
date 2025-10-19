@@ -1,19 +1,70 @@
 import streamlit as st
 import pandas as pd
+from pathlib import Path
 
-st.set_page_config(page_title="Hello Streamlit", page_icon="👋", layout="centered")
+st.set_page_config(page_title="CSV Viewer", page_icon="📈", layout="centered")
 
-st.title("Hello, Streamlit in Codespaces 👋")
-st.write("This is a simple demo running entirely in your browser-based dev environment.")
+DATA_PATH = Path("data") / "weather.csv"
 
-name = st.text_input("Your name", "Hawkar")
-temps = pd.DataFrame({"Temperature (°F)": [70, 75, 80], "Humidity (%)": [30, 45, 50]})
+st.title("CSV Viewer (Streamlit)")
+st.caption("Reads data/weather.csv and shows a table, summary, and a line chart.")
 
-st.subheader(f"Welcome, {name}!")
-st.dataframe(temps)
+@st.cache_data(show_spinner=False)
+def load_csv(p: Path) -> pd.DataFrame | None:
+    if not p.exists():
+        return None
+    df = pd.read_csv(p)
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    return df
 
-st.line_chart(temps["Temperature (°F)"])
+df = load_csv(DATA_PATH)
 
-if st.button("Compute Average Temp"):
-    avg = temps["Temperature (°F)"].mean()
-    st.success(f"Average temperature is {avg:.1f}°F")
+if df is None:
+    st.error(f"CSV not found at {DATA_PATH}. Make sure the file exists.")
+    st.stop()
+
+# Raw data
+st.subheader("Raw Data")
+st.dataframe(df, width="stretch")  # ✅ new API (replaces use_container_width)
+
+# Summary (make it pandas-version-safe)
+st.subheader("Summary Statistics")
+numeric_cols = df.select_dtypes(include="number").columns.tolist()
+if numeric_cols:
+    summary = df[numeric_cols].describe()
+    st.dataframe(summary, width="stretch")
+else:
+    st.info("No numeric columns found to summarize.")
+
+# Optional date filter
+has_dt = "Date" in df.columns and pd.api.types.is_datetime64_any_dtype(df["Date"])
+if has_dt:
+    dmin, dmax = df["Date"].min(), df["Date"].max()
+    if pd.notna(dmin) and pd.notna(dmax):
+        st.subheader("Filter")
+        start, end = st.date_input(
+            "Date range:",
+            value=(dmin.date(), dmax.date()),
+            min_value=dmin.date(),
+            max_value=dmax.date(),
+        )
+        if start and end:
+            mask = (df["Date"] >= pd.to_datetime(start)) & (df["Date"] <= pd.to_datetime(end))
+            df = df.loc[mask].copy()
+
+# Chart
+st.subheader("Chart")
+numeric_cols = df.select_dtypes(include="number").columns.tolist()
+if not numeric_cols:
+    st.warning("No numeric columns to plot.")
+else:
+    metric = st.selectbox("Select a numeric column to plot:", numeric_cols, index=0)
+    if has_dt:
+        chart_data = df.set_index("Date")[[metric]].sort_index()
+    else:
+        chart_data = df[[metric]]
+
+    # ❗ Do NOT pass width="stretch" here — Altair expects a number.
+    # Also avoid use_container_width (deprecated). Let Streamlit auto-size.
+    st.line_chart(chart_data)
